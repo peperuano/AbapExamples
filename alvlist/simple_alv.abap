@@ -36,7 +36,8 @@ form run_application.
 
   try.
     perform create_alv_table tables test_data changing test_alv.
-    perform format_columns changing test_alv.
+    perform set_alv_functions                 changing test_alv.
+    perform format_columns                    changing test_alv.
     test_alv->display( ).
   catch cx_salv_msg.
     write: / 'ALV error'.
@@ -53,6 +54,24 @@ form create_alv_table tables table_data
                       changing alv_table type ref to cl_salv_table raising cx_salv_msg.
     cl_salv_table=>factory( importing r_salv_table = alv_table
                              changing t_table      = table_data[] ).
+endform.
+
+"/""
+" There is a standard set of functions for things like sorting, filtering, etc already
+" avaliable with the ALV list. If you need custom events or buttons, those can be
+" added as well.
+"/
+form set_alv_functions changing alv_table type ref to cl_salv_table raising cx_salv_msg.
+
+  " I want to make sure the table actually exists before assigning it functions
+  if ( alv_table is not bound ).
+    return.
+  endif.
+
+  data functions type ref to cl_salv_functions_list.
+  functions = alv_table->get_functions( ).
+  functions->set_all( ).
+
 endform.
 
 "/""
