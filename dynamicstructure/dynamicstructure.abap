@@ -1,3 +1,5 @@
+" I originally intended this code for an ABAP version of game of life, so I had 
+" basically a table in mind that I used like a grid. 
 report.
 " table_data has to refer to a generic type "data" because it doesn't actually
 " exist yet. 
