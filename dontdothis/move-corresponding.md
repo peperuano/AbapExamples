@@ -1,7 +1,7 @@
 Move-Corresponding
 ==================
 
-I had been asked by a customer to modify an existing report to account for new functionality. The functionality involved organizing the data in a bit of a different manner. The existing transaction created sales documents based on the number of rows the end-user filled on the screen and a 
+I had been asked by a customer to modify an existing report to account for new functionality. The functionality involved extending an existing process to fit some new types of variables. The customer however asked that the existing functionality remained as is.
 
 ## The Keyword
 
