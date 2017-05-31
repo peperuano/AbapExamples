@@ -1,0 +1,828 @@
+*&---------------------------------------------------------------------*
+*& Report  ZIW69_EXPORTA_EXCEL
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+
+REPORT  zspooljob_to_excel_by_mail.
+
+DATA: dummy           TYPE TABLE OF rspoattr,
+      bin_size        TYPE i,
+      pdf_xstring     TYPE xstring,
+      la_byte_count   TYPE tst01-dsize.
+
+DATA id LIKE tsp01-rqident.
+
+CONSTANTS: c_tab TYPE c VALUE cl_abap_char_utilities=>horizontal_tab,
+           v_tab TYPE c VALUE cl_abap_char_utilities=>vertical_tab,
+           c_cr_lf TYPE c VALUE cl_abap_char_utilities=>cr_lf.
+*To Convert Spool to Excel
+TYPES: BEGIN OF t_spool.
+        INCLUDE STRUCTURE bapixmspoo.
+TYPES: END OF t_spool.
+
+TYPES: BEGIN OF t_joblog.
+TYPES:
+  joblog   TYPE tbtco-joblog,
+  client   TYPE symandt,
+  jobname  TYPE btcjob,
+  jobcount TYPE btcjobcnt,
+  wpnum    TYPE btcwpno,
+*  contents TYPE tt_joblog_contents,
+END OF t_joblog.
+
+DATA t_atributos TYPE TABLE OF bapixmspoolid WITH HEADER LINE.
+
+DATA: xls_string TYPE  string,
+      xls_str    TYPE xstring.
+
+DATA: BEGIN OF it_xls_spool OCCURS 0,
+        line(4096) TYPE c,
+      END OF it_xls_spool.
+
+DATA: it_spool_xls LIKE it_xls_spool OCCURS 0 WITH HEADER LINE.
+
+
+DATA: i_contents_hex TYPE TABLE OF solix WITH HEADER LINE,
+      aux_contents_hex TYPE TABLE OF solix WITH HEADER LINE,
+      lon TYPE i,
+      li_contents_hex  TYPE TABLE OF bapiconten WITH HEADER LINE.
+
+DATA: objpack      LIKE sopcklsti1 OCCURS 0 WITH HEADER LINE,
+document_data     LIKE sodocchgi1,
+remitent     LIKE soextreci1-receiver,
+objbin LIKE  solisti1 OCCURS 10 WITH HEADER LINE,
+objtxt       LIKE solisti1 OCCURS 0 WITH HEADER LINE,
+objhead      LIKE solisti1 OCCURS 1 WITH HEADER LINE,
+t_desti      TYPE TABLE OF zmaildest WITH HEADER LINE,
+destinataris TYPE TABLE OF somlreci1 WITH HEADER LINE.
+
+
+
+DATA:
+  g_joblog TYPE t_joblog.
+
+DATA BEGIN OF global_jlg_tbl OCCURS 50.
+        INCLUDE STRUCTURE tbtc5.
+DATA END OF global_jlg_tbl.
+
+DATA wa_log LIKE LINE OF global_jlg_tbl.
+
+DATA: sv_okcode LIKE sy-ucomm,
+        rc TYPE i,
+        sv_current_page            LIKE sy-cpage,
+        sv_current_head_row        LIKE sy-staro,
+        sv_current_row             LIKE sy-curow,
+        sv_current_col             LIKE sy-cucol,
+        local_repid                LIKE sy-repid.
+
+DATA: p_jobhead      TYPE tbtcjob,
+      p_steps        TYPE TABLE OF tbtcstep.
+
+DATA joblogid LIKE  tbtcjob-joblog.
+
+DATA: lines      TYPE btcint4,
+      direction  TYPE btcchar1.
+
+
+DATA: index TYPE i,
+      primera_vez.
+DATA: long TYPE i.
+DATA num_lineas TYPE i.
+
+*BP_JOBLOG_SHOW_SM37B
+
+DATA: jobcount TYPE btcjobcnt.
+DATA: jobname TYPE btcjob.
+DATA: stepcount TYPE btcstepcnt.
+DATA  joblog_owner_name(43).
+
+
+DATA: username LIKE sy-uname,
+      wa_usr21 TYPE usr21.
+
+DATA: tab1 TYPE TABLE OF rspo_ds  WITH HEADER LINE,
+      tab2 TYPE TABLE OF rspo_ds2  WITH HEADER LINE,
+      page_index TYPE TABLE OF rspo_index WITH HEADER LINE,
+      rq TYPE tsp01sys.
+
+
+DATA:clave LIKE tbtco-recobjkey,
+      wa_soudadcp TYPE v_soudadcp,
+      rectp(3),
+      recyr(2),
+      recno(12).
+
+DATA: it_sodm TYPE TABLE OF sodm WITH HEADER LINE,
+      hay_col_sel,
+      valor_key(10).
+
+*RVD 01.09.2011 INI
+
+DATA: wa_soid TYPE soid.
+
+SELECTION-SCREEN BEGIN OF BLOCK 1 WITH FRAME TITLE text-001.
+
+PARAMETERS: p_lista LIKE soid-objnam,
+            p_descr LIKE sodocchgi1-obj_descr.
+
+SELECTION-SCREEN END OF BLOCK 1.
+
+START-OF-SELECTION.
+*RVD 01.09.2011 FIN
+
+***********************************************************************************
+* debugging SM50
+*data: exit.
+*IF SY-UNAME = 'DE00004'.
+*  do.
+*    if exit = 'X'.
+*      exit.
+*    endif.
+*  enddo.
+*ENDIF.
+***********************************************************************************
+
+* Obtenemos la información del job en curso actual
+  CALL FUNCTION 'GET_JOB_RUNTIME_INFO'
+    IMPORTING
+*   EVENTID                       =
+*   EVENTPARM                     =
+*   EXTERNAL_PROGRAM_ACTIVE       =
+      jobcount                      = jobcount
+      jobname                       = jobname
+      stepcount                     = stepcount
+    EXCEPTIONS
+      no_runtime_info               = 1
+      OTHERS                        = 2.
+
+
+  CALL FUNCTION 'BP_JOB_READ'
+    EXPORTING
+      job_read_jobname      = jobname
+      job_read_jobcount     = jobcount
+      job_read_opcode       = 36
+    IMPORTING
+      job_read_jobhead      = p_jobhead
+    TABLES
+      job_read_steplist     = p_steps
+      spool_attributes      = t_atributos
+    EXCEPTIONS
+      invalid_opcode        = 2
+      job_doesnt_exist      = 1
+      job_doesnt_have_steps = 3
+      OTHERS                = 99.
+
+
+*  check p_jobhead-status <> 'R' AND
+*        p_jobhead-status <> 'F' AND
+*        p_jobhead-status <> 'A'.
+
+  "Se lee el nombre del report que crea la orden de spool
+  DATA: wa_steps LIKE LINE OF p_steps.        "RVD 26.10.2011
+  READ TABLE p_steps INTO wa_steps INDEX 1. "RVD 26.10.2011
+
+
+  g_joblog-jobname = jobname.
+  g_joblog-jobcount = jobcount.
+  g_joblog-joblog = p_jobhead-joblog.
+  g_joblog-client = p_jobhead-authckman.
+  g_joblog-wpnum = p_jobhead-wpnumber.
+
+  " write: / 'EL JOBLOG es',p_jobhead-joblog.
+
+  CONCATENATE g_joblog-jobname '/' g_joblog-jobcount
+    INTO joblog_owner_name SEPARATED BY space.
+
+
+* Se recupera el log del job
+  CALL FUNCTION 'BP_JOBLOG_READ'
+    EXPORTING
+      jobname               = g_joblog-jobname
+      jobcount              = g_joblog-jobcount
+      joblog                = g_joblog-joblog
+      client                = g_joblog-client
+      lines                 = lines
+      direction             = direction
+    TABLES
+      joblogtbl             = global_jlg_tbl
+    EXCEPTIONS
+      joblog_does_not_exist = 1
+      joblog_is_empty       = 2
+      job_does_not_exist    = 3
+      OTHERS                = 99.
+
+
+*Recuperamos del log el mensaje con la orden de spool.
+  READ TABLE global_jlg_tbl WITH KEY msgid = 'SY'
+                                     msgno = '355'
+                                   msgtype = 'S'
+                            INTO wa_log.
+
+*------------> JMRR 25/11/13 Petic. 14806
+* Después de los parches parece que ya no devuelve en el mensaje
+* SY355 el nº orden de spool.
+
+*  check sy-subrc = 0
+*    and wa_log-msgv1 is not initial.
+
+  "write: / wa_steps-PROGRAM.
+
+** Pasamos la salida del programa a excel para enviarlo por correo
+*  id = wa_log-msgv1.
+
+* Miramos si devuelve el mesanje SY355 para recuperar el SPOOLID
+  CLEAR id.
+  IF sy-subrc = 0 AND wa_log-msgv1 IS NOT INITIAL.
+    id = wa_log-msgv1.
+  ENDIF.
+
+* Si no lo devuelve, recuperamos el SPOOLID de otro sitio
+  IF id IS INITIAL.
+    READ TABLE  t_atributos INDEX 1.
+    id = t_atributos-spoolid.
+  ENDIF.
+
+
+  CHECK id IS NOT INITIAL.
+*<------- JMRR 25/11/13
+
+
+
+  SELECT SINGLE * INTO CORRESPONDING FIELDS OF rq
+    FROM tsp01
+    WHERE rqident = id.
+
+  rq-sys = sy-sysid.
+
+* Cogemos el adjunto y lo pasamos al formato excel
+
+  CALL FUNCTION 'RSPO_L_RETURN_RAW_DATA'
+    EXPORTING
+     rq                             = rq
+*       list_first                     = first_page
+*       list_count                     = last_page
+*     LIST_END                       = ' '
+    short                          = space
+*-------> JMRR 26/11/13 Petic. 14806
+* Después de los parches ya no existe el parámetro DISPLAY_ACC_LINES
+*    DISPLAY_ACC_LINES = 'X'
+   return_converted_otf       = 'X'
+*<------- JMRR 26/11/13
+*     SUPPRESS_PAGEINFO              = 'X'
+*   IMPORTING
+*     MORE_DATA                      =
+*     COL_HEADER                     =
+*     LAST_PAGE                      =
+    TABLES
+      line_buffer                    = tab1
+      page_index                     = page_index
+      line_buffer2                   = tab2
+   EXCEPTIONS
+     error                          = 1
+     error_in_struc_detection       = 2
+     OTHERS                         = 3.
+
+
+  " xsm - 10.01.2014 - Inc 15425 - Ini bloque nuevo
+  DATA:
+    lv_aux_tabix LIKE sy-tabix,
+    lv_flag_c, " Cabecera encontrada
+    lv_num_c TYPE i.
+  CLEAR:
+    lv_flag_c,
+    lv_num_c.
+  LOOP AT tab2. """
+    lv_aux_tabix = sy-tabix.
+    IF tab2-precol = 'P'.
+      CLEAR lv_flag_c.
+      DELETE tab2 INDEX lv_aux_tabix.
+    ELSE.
+      IF lv_flag_c IS INITIAL AND tab2-data_line(7) CP '*+COL1H+*'
+      OR lv_flag_c IS INITIAL AND tab2-data_line(7) CP '*+COL1N+*'. " xsm - 24.03.2015 - Inc 24377 - Línea nueva
+        lv_flag_c = 'X'.
+        lv_num_c = lv_num_c + 1.
+        IF lv_num_c > 1.
+          DELETE tab2 INDEX lv_aux_tabix.
+        ENDIF.
+      ELSEIF lv_flag_c IS INITIAL.
+        DELETE tab2 INDEX lv_aux_tabix.
+      ELSEIF tab2-data_line CP '*+4+4+4+4+4+4+4+4+*'.
+        DELETE tab2 INDEX lv_aux_tabix.
+      ELSEIF tab2-data_line IS INITIAL.
+        DELETE tab2 INDEX lv_aux_tabix.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+  " xsm - 10.01.2014 - Inc 15425 - Fin bloque nuevo
+
+  " xsm - 10.01.2014 - Inc 15425 - Ini bloque comentado
+**-------> JMRR 17/01/12
+** Hacemos estos para borrar las líneas iniciales que suele poner los programas con cabecera ALV
+*  loop at tab2.
+*    index = sy-tabix.
+**    if tab2-data_line+1(1) = 'C' and
+**       tab2-data_line+7(1) = '0' and
+**       tab2-data_line+9(1) = '4'.
+*    if tab2-data_line cp '*COL0N+COL0H+*'." '*+4+4+4+4+4+4+4+4+4*'. " Patrón de cabecera de tabla
+*      exit.
+*    endif.
+*    delete tab2 index index.
+*  endloop.
+*
+**Borramos el recuadro
+*  delete tab2 index index.
+*  index = index + 1.
+*  delete tab2 index index.
+*
+*** Borramos las líneas 1 y 3 con lo que se elimina el recuadro
+**  delete tab2 index 1.
+**  delete tab2 index 2.
+**<---------- JMRR 17/01/12
+  " xsm - 10.01.2014 - Inc 15425 - Fin bloque comentado
+
+
+  DATA aux_tab2 LIKE LINE OF tab2.
+*----> JMRR 17/01/12
+  DATA: copia_tab2 TYPE TABLE OF rspo_ds2  WITH HEADER LINE,
+        ini TYPE i,
+        indice TYPE i.
+*<----- JMRR 17/01/12
+
+  LOOP AT tab2.
+
+* Se chequea si la ste línea es un salto página para borrar la línea actual, ya que no tiene inform.
+    index = sy-tabix + 1.
+    READ TABLE tab2 INDEX index INTO aux_tab2.
+    index = index - 1.
+    IF aux_tab2-precol = 'P'.
+      DELETE tab2 INDEX index.
+      CONTINUE.
+    ENDIF.
+
+
+    " xsm - 10.01.2014 - Inc 15425 - Ini bloque comentado
+**-------> JMRR 17/01/12
+*** Salto de página, por lo que borramos cabeceras y fin de página.
+**    if tab2-precol = 'P'.
+**      delete tab2 index index.
+**      describe table tab2 lines num_lineas.
+**      check num_lineas > index.
+**      delete tab2 index index.
+**      delete tab2 index index.
+**      delete tab2 index index.
+**      continue.
+**    endif.
+*
+*
+** Salto de página, por lo que borramos cabeceras y fin de página.
+** Hacemos estos para borrar las líneas iniciales que suele poner los programas con cabecera ALV
+*
+*    if tab2-precol = 'P'.
+*
+*      copia_tab2[] = tab2[].
+*      ini = index.
+*      loop at copia_tab2 from ini.
+*        indice = sy-tabix.
+*        if copia_tab2-data_line cp '*+4+4+4+4+4+4+4+4+4*'. " Patrón de cabecera de tabla
+**        if copia_tab2-data_line+1(1) = 'C' and
+**           copia_tab2-data_line+7(1) = '0' and
+**           copia_tab2-data_line+9(1) = '4'.
+*          exit.
+*        endif.
+*        delete tab2 index indice.
+*        delete copia_tab2 index indice.
+*      endloop.
+*
+**Borramos el recuadro
+*      delete tab2 index indice.
+*      delete tab2 index indice.
+*      delete tab2 index indice.
+*
+*    endif.
+*<---------- JMRR 17/01/12
+    " xsm - 10.01.2014 - Inc 15425 - Fin bloque comentado
+
+    "RVD 05.10.2011 INI
+* Borramos los carácteres especiales
+**  replace all occurrences of regex '[^[:print:]]+(?!$)' in tab2-data_line with '|'.
+**  replace all occurrences of regex '[^[:print:]]+$' in tab2-data_line  with '|'.
+**
+**  replace all occurrences of '|5' in tab2-data_line with '|'.
+**  replace all occurrences of '|?' in tab2-data_line with '|'.
+
+*  replace all occurrences of regex '[^[:print:]]+(?!$)' in tab2-data_line with '||'.
+*  replace all occurrences of regex '[^[:print:]]+$' in tab2-data_line  with '||'.
+*  replace all occurrences of '||5' in tab2-data_line with '||'.
+*  replace all occurrences of '||?' in tab2-data_line with '||'.
+
+    "RVD 06/10/2016 Ini
+    data: lv_barras TYPE flag.
+    IF TAB2-DATA_LINE(10) CP '+5+COL0N+?' or TAB2-DATA_LINE(10) CP '+COL0N+5+?'.
+      lv_barras = 'X'.
+    ELSE.
+      CLEAR lv_barras.
+    ENDIF.
+    "RVD 06/10/2016 Fin
+
+    REPLACE ALL OCCURRENCES OF REGEX '[^[:print:]]+5' IN tab2-data_line WITH '||'.
+
+*----> 4167  por problemas de tabulación
+*    replace all occurrences of regex '[^[:print:]]+\?' in tab2-data_line with '||'.
+    REPLACE ALL OCCURRENCES OF REGEX '[^[:print:]]+\?' IN tab2-data_line WITH space.
+*<---- 4167
+
+**  replace all occurrences of '|COL0N|' in tab2-data_line with space.
+**  replace all occurrences of '|COL0H|' in tab2-data_line with space.
+**  replace all occurrences of '|COL1H|' in tab2-data_line with space.
+**  replace all occurrences of '|COL4H |' in tab2-data_line with space.
+**  replace all occurrences of 'COL2N' in tab2-data_line with space.
+**  replace all occurrences of '|COL2H|' in tab2-data_line with '|'.
+**  replace all occurrences of 'COL2H' in tab2-data_line with space.
+*  replace all occurrences of 'COL4V' in tab2-data_line with space. " JMRR 22/12/11
+
+    REPLACE ALL OCCURRENCES OF REGEX '[^[:print:]]+COL0N' IN tab2-data_line WITH space. " xsm - 10.03.2016 - Inc 30459 - Línea nueva
+    REPLACE ALL OCCURRENCES OF REGEX '[^[:print:]]+COL2N' IN tab2-data_line WITH space. " xsm - 10.03.2016 - Inc 30459 - Línea nueva
+    REPLACE ALL OCCURRENCES OF REGEX '[^[:print:]]+COL2\C\|\|' IN tab2-data_line WITH '||'.
+    REPLACE ALL OCCURRENCES OF REGEX '[^[:print:]]+COL\d\C\|\|' IN tab2-data_line WITH space.
+    REPLACE ALL OCCURRENCES OF REGEX '[^[:print:]]+COL\dV\s\|\|' IN tab2-data_line WITH '||||'.
+    REPLACE ALL OCCURRENCES OF REGEX '[^[:print:]]+COL\d\C\s\|\|' IN tab2-data_line WITH space.
+    REPLACE ALL OCCURRENCES OF REGEX '[^[:print:]]+COL\d\C' IN tab2-data_line WITH '||'.
+    REPLACE ALL OCCURRENCES OF REGEX 'COL\d\C' IN tab2-data_line WITH space.
+
+
+    REPLACE ALL OCCURRENCES OF REGEX '[^[:print:]]+(?!$)' IN tab2-data_line WITH space.
+
+*  replace all occurrences of regex '\|\|COL2\C\|\|' in tab2-data_line with '||'.
+*  replace all occurrences of regex '\|\|COL\d\C\|\|' in tab2-data_line with space.
+*  replace all occurrences of regex '\|\|COL\dV\s\|\|' in tab2-data_line with '||||'.
+*  replace all occurrences of regex '\|\|COL\d\C\s\|\|' in tab2-data_line with space.
+*  replace all occurrences of regex 'COL\d\C' in tab2-data_line with space.
+    "RVD 05.10.2011 FIN
+
+    TRANSLATE tab2-data_line USING '" '. " JMRR 10/04/15 petic. 24377
+
+    CONDENSE tab2-data_line.
+
+*----------> JMRR 22/12/11
+**   RVD 07.10.2011 INI
+*  IF tab2-data_line(5) EQ '|| ||'.
+*    tab2-data_line(5) = '   '.
+*    condense tab2-data_line.
+*  ENDIF.
+*
+*    IF tab2-data_line(1) EQ ' '.
+*      tab2-data_line(1) = ''.
+*    ELSEIF tab2-data_line(2) EQ '||'.
+*      tab2-data_line(2) = ''.
+*    ELSEIF tab2-data_line(3) EQ 'S||'.
+*      tab2-data_line(3) = ''.
+*    ENDIF.
+
+    "RVD 06/10/2016 Ini
+    IF lv_barras IS NOT INITIAL.
+     CONCATENATE '||' TAB2-DATA_LINE INTO TAB2-DATA_LINE.
+    ENDIF.
+    "RVD 06/10/2016 Fin
+
+    IF tab2-data_line(8) EQ '|| || ||'.
+      tab2-data_line(5) = '     '.
+    ELSEIF tab2-data_line(7) EQ  '|||| ||'.
+      tab2-data_line(7) = '       '.
+      CONDENSE tab2-data_line.
+      " xsm - 10.01.2014 - Inc 15425 - Ini bloque nuevo
+      SHIFT tab2-data_line RIGHT BY 1 PLACES.
+      tab2-data_line(1) = space.
+      " xsm - 10.01.2014 - Inc 15425 - Fin bloque nuevo
+    ELSEIF tab2-data_line(5) EQ '|| ||' AND hay_col_sel IS NOT INITIAL.
+      tab2-data_line(5) = '   '.
+      CONDENSE tab2-data_line.
+    ENDIF.
+
+    IF tab2-data_line(1) EQ ' '.
+      tab2-data_line(1) = ''.
+*---------> JMRR 02/04/14 Petic. 17521
+    ELSEIF tab2-data_line(4) EQ '||||'.
+      tab2-data_line(4) = ''.
+*<--------- JMRR 02/04/14
+    ELSEIF tab2-data_line(2) EQ '||'.
+      tab2-data_line(2) = ''.
+    ELSEIF tab2-data_line(3) EQ 'S||'.
+      tab2-data_line(3) = ''.
+      hay_col_sel = 'C'.
+    ENDIF.
+
+*<--------- JMRR 22/12/11
+
+
+*    tab2-data_line(1) = ''.
+*   RVD 07.10.2011 FIN
+    APPEND tab2-data_line TO it_xls_spool. " it_spool_xls.
+  ENDLOOP.
+
+
+* Borramos las líneas de fin de página y las vacías
+  DELETE  it_xls_spool WHERE line(7) = '||||044' OR LINE IS INITIAL. " JMRR 17/01/12
+
+  LOOP AT it_xls_spool.
+
+    REPLACE ALL OCCURRENCES OF '#' IN it_xls_spool WITH space.  "RVD 26.10.2011
+    REPLACE ALL OCCURRENCES OF c_tab IN it_xls_spool WITH space.  "RVD 26.10.2011
+    REPLACE ALL OCCURRENCES OF '||' IN it_xls_spool WITH c_tab.  "RVD 07.10.2011
+    CONCATENATE it_xls_spool c_cr_lf INTO it_xls_spool.
+    xls_string = it_xls_spool.
+
+
+*To convert the string into xstring format for mail sending
+    CALL FUNCTION 'SCMS_STRING_TO_XSTRING'
+      EXPORTING
+        text           = xls_string                      "String of String data type
+*   MIMETYPE       = ' '_
+      encoding       = '1101' "-> ascii
+     IMPORTING
+       buffer         = xls_str                             "String of XString data type
+     EXCEPTIONS
+       failed         = 1
+       OTHERS         = 2          .
+
+    CHECK sy-subrc = 0.
+
+*Converting the table contents from xstring to binary
+    CALL FUNCTION 'SCMS_XSTRING_TO_BINARY'
+      EXPORTING
+        buffer        = xls_str
+      IMPORTING
+        output_length = long
+      TABLES
+        binary_tab    = aux_contents_hex.
+
+    CHECK sy-subrc = 0.
+    APPEND LINES OF aux_contents_hex TO i_contents_hex.
+
+  ENDLOOP.
+
+
+
+
+* Recuperamos el mail, para ello primero si se puso en DESTINO LISTA SPOOL (SM36)
+* un usuario o una lista de distribución, en caso contrario, se coge el usuario
+* que aparece en el primer paso del JOB.
+
+* DIRECCION DE ENVIO
+  CLEAR destinataris.
+
+  SELECT SINGLE recobjkey INTO clave
+    FROM tbtco
+    WHERE jobname = jobname
+      AND jobcount = jobcount.
+
+*RVD 01.09.2011 INI
+  IF clave IS INITIAL OR p_lista IS NOT INITIAL. "Se le da prioridad a la lista de distribución
+    CLEAR wa_soid.
+    SELECT SINGLE *
+      FROM soid
+      INTO wa_soid
+      WHERE objnam EQ p_lista
+      AND dlitp = 'DLI'.
+
+    IF sy-subrc <> 0.
+      WRITE 'ERROR:Lista de distribución no válida'.
+      EXIT.
+    ELSE.
+      CONCATENATE wa_soid-dlitp wa_soid-dliyr wa_soid-dlino INTO clave.
+      CONDENSE clave.
+    ENDIF.
+  ENDIF.
+*RVD 01.09.2011 FIN
+
+  IF clave IS NOT INITIAL.
+
+    rectp = clave(3).
+    recyr = clave+3(2).
+    recno = clave+5(12).
+
+    IF rectp = 'USR'. " Usuario interno SAP
+      SELECT SINGLE * INTO wa_soudadcp
+      FROM v_soudadcp
+        WHERE usrtp = rectp
+          AND usryr = recyr
+          AND usrno = recno.
+
+      IF sy-subrc <> 0.
+        WRITE 'ERROR:El usuario no tiene dirección de correo asignada'.
+        EXIT.
+      ENDIF.
+
+      SELECT SINGLE smtp_addr INTO destinataris-receiver
+        FROM adr6
+        WHERE addrnumber = wa_soudadcp-addrnumber
+          AND persnumber = wa_soudadcp-persnumber.
+      IF sy-subrc <> 0.
+        WRITE 'ERROR:El usuario no tiene dirección de correo asignada'.
+        EXIT.
+      ENDIF.
+
+      destinataris-express = 'X'.
+      destinataris-rec_type = 'U'.
+      destinataris-copy = 'X'.
+      APPEND destinataris.
+
+    ELSEIF rectp = 'ADR'. " Dirección correo electrónico
+
+      valor_key = it_sodm-memno+2.
+      SELECT SINGLE name_text INTO destinataris-receiver
+        FROM v_adcp_so
+        WHERE so_key = valor_key.
+
+      IF sy-subrc <> 0.
+        WRITE 'ERROR:El usuario no tiene dirección de correo asignada'.
+        EXIT.
+      ENDIF.
+
+      destinataris-express = 'X'.
+      destinataris-rec_type = 'U'.
+      destinataris-copy = 'X'.
+      APPEND destinataris.
+
+
+    ELSEIF rectp = 'DLI'. "Slista de distribución (dentro puede haber email y usuario SAP)
+
+      " xsm - 08.02.2012 - Inicio bloque comentado - 3069
+*      refresh it_sodm.
+*      select * into table it_sodm
+*        from sodm
+*       where dlitp = rectp
+*         and dliyr = recyr
+*         and dlino = recno.
+*
+*
+*      loop at it_sodm.
+*
+*        clear destinataris.
+*        if it_sodm-memtp = 'USR'. " Usuario SAP
+*
+*          select single * into wa_soudadcp
+*          from v_soudadcp
+*            where usrtp = it_sodm-memtp
+*              and usryr = it_sodm-memyr
+*              and usrno = it_sodm-memno.
+*
+*          if sy-subrc <> 0.
+*            write 'ERROR:El usuario no tiene dirección de correo asignada'.
+*            continue.
+*          endif.
+*
+*          select single SMTP_ADDR into destinataris-receiver
+*            from adr6
+*            where ADDRNUMBER = wa_soudadcp-ADDRNUMBER
+*              and PERSNUMBER = wa_soudadcp-PERSNUMBER.
+*
+*          if sy-subrc <> 0.
+*            write 'ERROR:El usuario no tiene dirección de correo asignada'.
+*            continue.
+*          endif.
+*
+*
+*        elseif it_sodm-memtp = 'ADR'. " Dirección correo electrónico
+*
+*          valor_key = it_sodm-memno+2.
+*          select single name_text into destinataris-receiver
+*            from v_adcp_so
+*            where so_key = valor_key.
+*
+*          if sy-subrc <> 0.
+*            write 'ERROR:El usuario no tiene dirección de correo asignada'.
+*            continue.
+*          endif.
+*
+*        endif.
+*
+*        destinataris-express = 'X'.
+*        destinataris-rec_type = 'U'.
+*        destinataris-copy = 'X'.
+*        APPEND destinataris.
+*
+*      endloop.
+      " xsm - 08.02.2012 - Fin    bloque comentado - 3069
+
+      " xsm - 08.02.2012 - Inicio nuevo bloque - 3069
+      " Cuando en la tabla receivers se quiere pasar una lista hay que poner el
+      " nombre que se usa en la transacción SO23 (soid-objnam)
+      IF p_lista IS INITIAL.
+        " p_lista se dejó vacío. Se recupera desde el dato que se le puso al JOB
+        SELECT SINGLE objnam FROM soid INTO destinataris-receiver
+          WHERE dlitp = rectp
+            AND dliyr = recyr
+            AND dlino = recno.
+      ELSE.
+        " Se rellenó p_lista
+        destinataris-receiver = p_lista.
+      ENDIF.
+      destinataris-express = 'X'.
+      destinataris-rec_type = 'C'.
+      destinataris-copy = 'X'.
+      APPEND destinataris.
+      " xsm - 08.02.2012 - Fin    nuevo bloque - 3069
+
+    ENDIF.
+
+  ELSE.
+
+* Obtenemos el nombre de usuario del paso 1 del job
+    SELECT SINGLE authcknam INTO username
+      FROM tbtcp
+      WHERE jobname = jobname
+        AND jobcount = jobcount
+        AND stepcount = 1.
+
+    IF sy-subrc <> 0.
+      WRITE 'ERROR: El paso 1 del job no tiene usuario asignado'.
+      EXIT.
+    ENDIF.
+
+*Obtenemos nº usuario y direccion
+    SELECT SINGLE * INTO wa_usr21
+      FROM usr21
+      WHERE bname = username.
+
+    IF sy-subrc <> 0.
+      WRITE 'ERROR:El usuario no tiene dirección de correo asignada'.
+      EXIT.
+    ENDIF.
+
+
+* Recuperamos el email
+    SELECT SINGLE smtp_addr INTO destinataris-receiver
+      FROM adr6
+      WHERE addrnumber = wa_usr21-addrnumber
+        AND persnumber = wa_usr21-persnumber.
+
+    IF sy-subrc <> 0.
+      WRITE 'ERROR:El usuario no tiene dirección de correo asignada'.
+      EXIT.
+    ENDIF.
+
+    destinataris-express = 'X'.
+    destinataris-rec_type = 'U'.
+    destinataris-copy = 'X'.
+    APPEND destinataris.
+
+
+  ENDIF.
+
+  DESCRIBE TABLE i_contents_hex LINES num_lineas.
+  lon = num_lineas * 255.
+
+* Se envía ahora el mail
+  document_data-obj_name = 'SENDFILE'.
+
+  IF p_descr IS INITIAL.
+    CONCATENATE 'Envío de spool' wa_steps-program INTO p_descr SEPARATED BY space.
+  ENDIF.
+
+  document_data-obj_descr = p_descr. "RVD 26.10.2011
+  objtxt = p_descr.                  "RVD 26.10.2011
+  APPEND objtxt.
+
+  document_data-doc_size = lon + STRLEN( objtxt ).
+
+  objhead = wa_steps-program. "RVD 26.10.2011
+
+  objpack-transf_bin = 'X'.
+  objpack-head_start = 1.
+  objpack-head_num = 1.
+  objpack-body_start = 1.
+  objpack-body_num = num_lineas.
+  objpack-doc_type = 'XLS'  .
+  objpack-obj_name = objhead.
+  objpack-obj_descr = objhead.
+  objpack-doc_size = lon.
+  APPEND objpack.
+
+  CONCATENATE objhead '.xls' INTO objhead.  "RVD 26.10.2011
+  "objhead = 'ZIW69.xls'.                   "RVD 26.10.2011
+  APPEND objhead.
+
+  CALL FUNCTION 'SO_NEW_DOCUMENT_ATT_SEND_API1'
+    EXPORTING
+      document_data              = document_data
+      put_in_outbox              = 'X'
+      commit_work                = 'X'
+    TABLES
+      packing_list               = objpack
+      object_header              = objhead
+      contents_bin               = objbin
+      contents_txt               = objtxt
+      contents_hex               = i_contents_hex
+      receivers                  = destinataris
+    EXCEPTIONS
+      too_many_receivers         = 1
+      document_not_sent          = 2
+      document_type_not_exist    = 3
+      operation_no_authorization = 4
+      parameter_error            = 5
+      x_error                    = 6
+      enqueue_error              = 7
+      OTHERS                     = 8.
