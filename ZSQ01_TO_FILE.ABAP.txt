@@ -1,0 +1,256 @@
+.*&---------------------------------------------------------------------*  
+ *& Report  ZSQ01_TO_FILE  
+ *&  
+ *&---------------------------------------------------------------------*  
+ *&  
+ *&  
+ *&---------------------------------------------------------------------*  
+   
+ REPORT  zsq01_to_file.  
+ PARAMETERS p_name TYPE rs38m-programm OBLIGATORY.  
+ PARAMETERS p_var  TYPE rsvar-variant OBLIGATORY.  
+ PARAMETERS p_con  TYPE c AS CHECKBOX DEFAULT ''.  
+ PARAMETERS p_file TYPE alk_string.  
+ DATA gt_strings TYPE STANDARD TABLE OF string.  
+   
+ AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_name.  
+   PERFORM program_f4 USING p_name  
+                            p_var.  
+   
+ AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_var.  
+   PERFORM variant_f4 USING  p_name  
+                             p_var .  
+   
+ END-OF-SELECTION.  
+   REFRESH gt_strings.  
+   PERFORM do_the_job.  
+   PERFORM save_file.  
+ *&---------------------------------------------------------------------*  
+ *&      Form  variant_f4  
+ *&---------------------------------------------------------------------*  
+ *       text  
+ *----------------------------------------------------------------------*  
+ *      -->REPNAME    text  
+ *      -->VARNAME    text  
+ *----------------------------------------------------------------------*  
+ FORM variant_f4 USING repname TYPE programm  
+                       varname TYPE rsvar-variant.  
+   
+   DATA: report  LIKE rsvar-report,  
+         variant LIKE rsvar-variant.  
+   DATA lt_dynpfields  TYPE STANDARD TABLE OF  dynpread.  
+   DATA ls_dynpfields  TYPE dynpread.  
+   CLEAR ls_dynpfields.  
+   ls_dynpfields-fieldname = 'P_NAME'.  
+   REFRESH lt_dynpfields.  
+   APPEND ls_dynpfields TO lt_dynpfields.  
+   DATA: repid LIKE sy-repid.  
+   repid = sy-repid.  
+   CALL FUNCTION 'DYNP_VALUES_READ'  
+     EXPORTING  
+       dyname                               = repid  
+       dynumb                               = sy-dynnr  
+     TABLES  
+       dynpfields                           = lt_dynpfields  
+    EXCEPTIONS  
+      OTHERS  
+             .  
+   READ TABLE lt_dynpfields INTO ls_dynpfields INDEX 1.  
+   p_name = ls_dynpfields-fieldvalue.  
+   report = repname.  
+   IF report(1) = '!'.                  " temporarer Report  
+     report(1) = 'A'.  
+   ENDIF.  
+   CALL FUNCTION 'RS_VARIANT_CATALOG'  
+     EXPORTING  
+       report      = report  
+     IMPORTING  
+       sel_variant = variant  
+     EXCEPTIONS  
+       OTHERS      = 1.  
+   IF sy-subrc = 0.  
+     varname = variant.  
+   ELSE.  
+   ENDIF.  
+   
+ ENDFORM.                    "variant_f4  
+ *&---------------------------------------------------------------------*  
+ *&      Form  PROGRAM_F4  
+ *&---------------------------------------------------------------------*  
+ *       text  
+ *----------------------------------------------------------------------*  
+ *      -->P_P_PNAME  text  
+ *      -->P_P_VAR  text  
+ *----------------------------------------------------------------------*  
+ FORM program_f4  USING    repname TYPE programm  
+                           varname TYPE rsvar-variant.  
+   DATA: report  LIKE rsvar-report,  
+          variant LIKE rsvar-variant.  
+   DATA lt_dynpfields  TYPE STANDARD TABLE OF  dynpread.  
+   DATA ls_dynpfields  TYPE dynpread.  
+   CLEAR ls_dynpfields.  
+   ls_dynpfields-fieldname = 'P_NAME'.  
+   REFRESH lt_dynpfields.  
+   APPEND ls_dynpfields TO lt_dynpfields.  
+   DATA: repid LIKE sy-repid.  
+   repid = sy-repid.  
+   CALL FUNCTION 'DYNP_VALUES_READ'  
+     EXPORTING  
+       dyname                               = repid  
+       dynumb                               = sy-dynnr  
+     TABLES  
+       dynpfields                           = lt_dynpfields  
+    EXCEPTIONS  
+      OTHERS  
+             .  
+   READ TABLE lt_dynpfields INTO ls_dynpfields INDEX 1.  
+   p_name = ls_dynpfields-fieldvalue.  
+   DATA l_programm LIKE rs38m-programm.  
+   l_programm = p_name .  
+   CALL FUNCTION 'REPOSITORY_INFO_SYSTEM_F4'  
+     EXPORTING  
+       object_type          = 'PROG'  
+       object_name          = l_programm  
+       suppress_selection   = 'X'  
+     IMPORTING  
+       object_name_selected = l_programm  
+     EXCEPTIONS  
+       cancel               = 01.  
+   IF sy-subrc = 0.  
+     p_name = l_programm.  
+   ENDIF.  
+ ENDFORM.                    " PROGRAM_F4  
+ *&---------------------------------------------------------------------*  
+ *&      Form  DO_THE_JOB  
+ *&---------------------------------------------------------------------*  
+ *       text  
+ *----------------------------------------------------------------------*  
+ *  -->  p1        text  
+ *  <--  p2        text  
+ *----------------------------------------------------------------------*  
+ FORM do_the_job .  
+   FIELD-SYMBOLS <lt_report_data>   TYPE ANY TABLE.  
+   DATA lr_report_data              TYPE REF TO data.  
+   DATA ls_metadata  TYPE cl_salv_bs_runtime_info=>s_type_metadata.  
+   DATA lv_string TYPE string.  
+   DATA lv_lines TYPE i.  
+   DATA lv_loop_index TYPE i.  
+   DATA lt_field_cat  TYPE lvc_t_fcat.  
+   DATA ls_f_cat TYPE LINE OF lvc_t_fcat.  
+   DATA lv_value_condesed TYPE string.  
+   FIELD-SYMBOLS <fs_dtab> TYPE ANY .  
+   FIELD-SYMBOLS <fv_value> TYPE ANY .  
+   FIELD-SYMBOLS <fs_listdesc>  TYPE LINE OF rsaqtldesc.  
+   
+   cl_salv_bs_runtime_info=>set(  
+     EXPORTING display  = abap_false  
+               metadata = abap_true  
+               data     = abap_true ).  
+   SUBMIT (p_name) USING SELECTION-SET p_var AND RETURN.  
+   TRY.  
+       cl_salv_bs_runtime_info=>get_data_ref(  
+         IMPORTING r_data = lr_report_data ).  
+       ASSIGN lr_report_data->* TO <lt_report_data>.  
+       ls_metadata = cl_salv_bs_runtime_info=>get_metadata( ).  
+     CATCH cx_salv_bs_sc_runtime_info.  
+       cl_salv_bs_runtime_info=>clear_all( ).  
+       MESSAGE `Unable to retrieve ALV data` TYPE 'E'.  
+   ENDTRY.  
+   
+   
+   cl_salv_bs_runtime_info=>clear_all( ).  
+   CHECK <lt_report_data> IS ASSIGNED.  
+   DESCRIBE TABLE <lt_report_data> LINES lv_lines.  
+   CHECK lv_lines > 0.  
+   lt_field_cat[] = ls_metadata-t_fcat[].  
+   SORT lt_field_cat STABLE BY no_out col_pos .  
+   CLEAR lv_string.  
+   lv_loop_index = 1.  
+   LOOP AT lt_field_cat INTO ls_f_cat  
+     WHERE no_out IS INITIAL.  
+     CLEAR lv_value_condesed.  
+     lv_value_condesed = ls_f_cat-reptext.  
+     IF p_con = 'X'.  
+       CONDENSE lv_value_condesed .  
+     ENDIF.  
+     IF lv_loop_index <> 1.  
+       IF p_con = 'X'.  
+         CONCATENATE  lv_string ';' lv_value_condesed   INTO lv_string  
+               RESPECTING BLANKS.  
+       ELSE.  
+         CONCATENATE  lv_string ';' ls_f_cat-reptext   INTO lv_string  
+             RESPECTING BLANKS.  
+       ENDIF.  
+     ELSEIF lv_loop_index = 1.  
+       IF p_con = 'X'.  
+         CONCATENATE lv_string lv_value_condesed  INTO lv_string  
+             RESPECTING BLANKS.  
+       ELSE.  
+         CONCATENATE lv_string ls_f_cat-reptext  INTO lv_string  
+           RESPECTING BLANKS.  
+       ENDIF.  
+     ENDIF.  
+     lv_loop_index = lv_loop_index + 1.  
+   ENDLOOP.  
+   APPEND lv_string TO gt_strings.  
+   LOOP AT <lt_report_data> ASSIGNING <fs_dtab>.  
+     CLEAR lv_string .  
+     lv_loop_index = 1.  
+     LOOP AT lt_field_cat INTO ls_f_cat  
+     WHERE no_out IS INITIAL.  
+        ASSIGN COMPONENT ls_f_cat-fieldname OF STRUCTURE <fs_dtab> TO <fv_value>.  
+       IF <fv_value> IS ASSIGNED.  
+         CLEAR lv_value_condesed.  
+         lv_value_condesed = <fv_value>.  
+         IF p_con = 'X'.  
+           CONDENSE lv_value_condesed .  
+         ENDIF.  
+         IF lv_loop_index <> 1.  
+           IF p_con = 'X'.  
+             CONCATENATE lv_string ';' lv_value_condesed  INTO lv_string  
+               RESPECTING BLANKS.  
+           ELSE.  
+             CONCATENATE lv_string ';' <fv_value> INTO lv_string  
+             RESPECTING BLANKS.  
+           ENDIF.  
+         ELSEIF lv_loop_index = 1.  
+           IF p_con = 'X'.  
+             CONCATENATE lv_string lv_value_condesed INTO lv_string  
+             RESPECTING BLANKS.  
+           ELSE.  
+             CONCATENATE lv_string <fv_value> INTO lv_string  
+           RESPECTING BLANKS.  
+           ENDIF.  
+         ENDIF.  
+         UNASSIGN <fv_value>.  
+       ENDIF.  
+       lv_loop_index = lv_loop_index + 1.  
+     ENDLOOP.  
+     APPEND lv_string TO gt_strings.  
+   ENDLOOP.  
+ ENDFORM.                    " DO_THE_JOB  
+ *&---------------------------------------------------------------------*  
+ *&      Form  SAVE_FILE  
+ *&---------------------------------------------------------------------*  
+ *       text  
+ *----------------------------------------------------------------------*  
+ *  -->  p1        text  
+ *  <--  p2        text  
+ *----------------------------------------------------------------------*  
+ FORM save_file .  
+   CHECK gt_strings IS NOT INITIAL.  
+   DATA lv_string TYPE string.  
+   OPEN DATASET p_file FOR OUTPUT IN LEGACY TEXT MODE CODE PAGE  
+     '1504' WITH WINDOWS LINEFEED  
+     IGNORING CONVERSION ERRORS  
+              REPLACEMENT CHARACTER '#'.  
+   IF sy-subrc = 0.  
+     LOOP AT gt_strings INTO lv_string.  
+       TRY.  
+           TRANSFER lv_string TO p_file.  
+         CATCH cx_sy_conversion_codepage.  
+       ENDTRY.  
+     ENDLOOP.  
+     CLOSE DATASET p_file.  
+   ENDIF.  
+ ENDFORM.                    " SAVE_FILE  
